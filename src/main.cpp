@@ -1,3 +1,14 @@
+/**
+* @file main.cpp
+ * @brief Gestion de feux tricolores connectés avec ESP32 et Adafruit IO (WiFi, MQTT, HTTP).
+ *
+ * @details
+ * - Permet la connexion WiFi avec configuration web
+ * - Utilise MQTT pour recevoir l'état du trafic
+ * - Pilote les changements des feux selon le trafic
+ * - Utilise la mémoire non-volatile pour stocker les identifiants
+ */
+
 #include "WiFi.h"
 #include "ESPAsyncWebServer.h"
 #include "Preferences.h"
@@ -5,9 +16,14 @@
 #include <PubSubClient.h>
 #include "ArduinoJson.h"
 
+// -----------------------------------------------------------------------------
+// Variables globales
+// -----------------------------------------------------------------------------
+
+/** @brief Objet pour stocker et récupérer les préférences (WiFi, Adafruit IO) */
 Preferences preferences;
 
-// HTML form for entering credentials
+/** @brief Formulaire HTML pour configurer WiFi et Adafruit IO */
 auto htmlForm = R"rawliteral(
 <!DOCTYPE HTML><html>
   <head>
@@ -37,40 +53,49 @@ auto htmlForm = R"rawliteral(
 </html>
 )rawliteral";
 
-// Define AP credentials
+/** @brief SSID du point d'accès créé par l'ESP32 */
 auto ap_ssid = "ESP32-Access-Point";
+/** @brief Mot de passe du point d'accès */
 auto ap_password = "123456789";
 
-// WiFi credentials variables
-String wifi_ssid;
-String wifi_password;
-String aio_username;
-String aio_key;
+// Credentials
+String wifi_ssid;       /**< SSID WiFi enregistré */
+String wifi_password;   /**< Mot de passe WiFi enregistré */
+String aio_username;    /**< Nom d'utilisateur Adafruit IO */
+String aio_direction;   /**< Direction du trafic */
+String aio_key;         /**< Clé d'accès Adafruit IO */
+
+/** @brief Adresse du serveur MQTT (Adafruit IO) */
 auto mqtt_server = "io.adafruit.com";
 
-// Create an instance of the web server
+/** @brief Serveur Web Asynchrone sur le port 80 */
 AsyncWebServer server(80);
 
-// Setup MQTT
+//! Instances WiFi et MQTT côté client.
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 
-// mqtt feed
-String aio_direction;
-String aio_directionTraffic;
-String aio_directionPriority;
-String aio_directionPedestrian;
-String aio_directionTimer;
+//! Variables pour stocker les valeurs des feeds MQTT
+String aio_directionTraffic, aio_directionPriority, aio_directionPedestrian, aio_directionTimer;
 
-String feed1;
-String feed2;
-String feed3;
-String feed4;
+//! Topics des feeds MQTT
+String feed1, feed2, feed3, feed4;
 
+/** @brief Variable pour suivre le nombre de véhicules détectés. */
 int vehicleCount = 7;
+/** @brief Variable pour suivre le nombre de piétons détectés */
 int pedestrianCount = 0;
 
+// -----------------------------------------------------------------------------
+// Fonctions principales
+// -----------------------------------------------------------------------------
+
+/**
+ * @brief Connecte l'ESP32 au WiFi enregistré.
+ *
+ * @details Redémarre l'ESP32 après échec de connexion au bout de 10 secondes.
+ */
 void Wifi_Setup()
 {
   Serial.println("Connecting to WiFi...");
@@ -96,6 +121,12 @@ void Wifi_Setup()
   Serial.println("IP Address: " + WiFi.localIP().toString());
 }
 
+/**
+ * @brief Envoie une valeur vers un feed Adafruit IO via HTTP POST.
+ *
+ * @param feed Nom du feed (ex: "north.timer")
+ * @param value Valeur à envoyer
+ */
 void post_Setup(const String& feed, const String& value) {
   const String link = "https://io.adafruit.com/api/v2/Thorgan/feeds/" + feed + "/data";
   HTTPClient http;
@@ -122,6 +153,12 @@ void post_Setup(const String& feed, const String& value) {
   http.end();
 }
 
+/**
+ * @brief Récupère la dernière valeur d'un feed Adafruit IO via HTTP GET.
+ *
+ * @param feed Nom du feed (ex: "north.timer")
+ * @return Dernière valeur enregistrée
+ */
 String get_Setup(const String& feed)
 {
   HTTPClient http;
@@ -158,6 +195,9 @@ String get_Setup(const String& feed)
   return "";
 }
 
+/**
+ * @brief Démarre un point d'accès WiFi pour permettre la saisie d'identifiants WiFi et Adafruit IO.
+ */
 void start_access_point()
 {
   WiFi.softAP(ap_ssid, ap_password);
@@ -198,6 +238,11 @@ void start_access_point()
   server.begin();
 }
 
+/**
+ * @brief Vérifie si des identifiants WiFi et Adafruit IO existent dans la mémoire.
+ *
+ * @return true si les identifiants sont valides, false sinon.
+ */
 bool credentialsExist() {
   preferences.begin("wifiCreds", false);
   const bool valid = preferences.getString("wifi_ssid", "") != "" &&
@@ -209,6 +254,13 @@ bool credentialsExist() {
   return valid;
 }
 
+/**
+ * @brief Fonction appelée automatiquement à la réception d'un message MQTT.
+ *
+ * @param topic Sujet du message
+ * @param payload Données envoyées
+ * @param length Taille des données
+ */
 void callback(char* topic, const byte* payload, const unsigned int length) {
   const auto incomingTopic = String(topic);
   const String value(reinterpret_cast<const char*>(payload), length);
@@ -223,6 +275,14 @@ void callback(char* topic, const byte* payload, const unsigned int length) {
   }
 }
 
+/**
+ * @brief Détecte un véhicule et met à jour les données de trafic pertinentes.
+ *
+ * Détecte un véhicule, incrémente le compteur de véhicules et envoie les données mises à jour à Adafruit IO.
+ * Si le véhicule est marqué comme prioritaire, des actions spécifiques sont également effectuées.
+ *
+ * @param isPriority Définit si le véhicule détecté est un véhicule prioritaire. Par défaut à false.
+ */
 void detectVehicle(bool isPriority = false) {
   vehicleCount++;
   aio_directionTraffic = String(vehicleCount);
@@ -239,12 +299,29 @@ void detectVehicle(bool isPriority = false) {
   post_Setup(feed1, aio_directionTraffic);
 }
 
+/**
+ * @brief Détecte un piéton et met à jour les données associées.
+ *
+ * Cette fonction incrémente le compteur de piétons, met à jour la variable.
+ */
 void detectPedestrian() {
-  aio_directionPedestrian = String(pedestrianCount);
-  Serial.println("Pedestrian detected!");
   pedestrianCount++;
+  Serial.println("Pedestrian detected!");
+  aio_directionPedestrian = String(pedestrianCount);
 }
 
+/**
+ * @brief Gère le système de feux de circulation en fonction des données des différents flux.
+ *
+ * Cette fonction traite les signaux actuels de trafic, de piétons et de priorité
+ * reçus sous forme de chaînes de caractères depuis les flux Adafruit IO. En fonction de ces signaux :
+ * - Si une traversée piétonne est demandée, elle déclenche une mise à jour du flux correspondant.
+ * - Si une condition de priorité (par ex., véhicule d'urgence) est détectée, elle notifie le flux de priorité.
+ * - Si la valeur du trafic dépasse un seuil (par ex., >1), elle signale le nombre de véhicules au flux de trafic.
+ *
+ * Elle utilise la fonction `post_Setup` pour envoyer des mises à jour en effectuant des requêtes HTTP POST
+ * vers les flux Adafruit IO désignés.
+ */
 void controlTrafficLight() {
   Serial.printf("Traffic : %d\n", aio_directionTraffic.toInt());
 
@@ -258,6 +335,9 @@ void controlTrafficLight() {
     post_Setup(feed1, String(vehicleCount));
 }
 
+/**
+ * @brief Fonction d'initialisation appelée au démarrage de l'ESP32.
+ */
 void setup() {
   Serial.begin(115200);
 
@@ -311,6 +391,9 @@ void setup() {
 unsigned long lastUpdate = 0;
 constexpr unsigned long updateInterval = 6000; // 6 seconds
 
+/**
+ * @brief Boucle principale qui gère la logique de communication MQTT et la mise à jour des timers.
+ */
 void loop() {
   client.loop();
 
