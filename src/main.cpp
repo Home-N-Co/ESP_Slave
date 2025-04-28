@@ -21,9 +21,9 @@ auto htmlForm = R"rawliteral(
       <label for="password">WiFi Password:</label><br>
       <input type="password" id="password" name="password"><br><br>
       <label for="aio_username">Adafruit IO Username:</label><br>
+      <input type="text" id="aio_username" name="aio_username"><br>
       <label for="aio_direction">Direction :</label><br>
       <input type="text" id="aio_direction" name="aio_direction"><br><br>
-      <input type="text" id="aio_username" name="aio_username"><br>
       <label for="aio_key">Adafruit IO Key:</label><br>
       <input type="text" id="aio_key" name="aio_key"><br><br>
       <input type="submit" value="Save Credentials">
