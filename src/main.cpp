@@ -18,14 +18,19 @@ auto htmlForm = R"rawliteral(
     <form action="/save" method="POST">
       <label for="ssid">WiFi SSID:</label><br>
       <input type="text" id="ssid" name="ssid"><br>
+
       <label for="password">WiFi Password:</label><br>
       <input type="password" id="password" name="password"><br><br>
+
       <label for="aio_username">Adafruit IO Username:</label><br>
       <input type="text" id="aio_username" name="aio_username"><br>
-      <label for="aio_direction">Direction :</label><br>
-      <input type="text" id="aio_direction" name="aio_direction"><br><br>
+
       <label for="aio_key">Adafruit IO Key:</label><br>
       <input type="text" id="aio_key" name="aio_key"><br><br>
+
+      <label for="aio_direction">Direction :</label><br>
+      <input type="text" id="aio_direction" name="aio_direction"><br><br>
+
       <input type="submit" value="Save Credentials">
     </form>
   </body>
@@ -46,35 +51,25 @@ auto mqtt_server = "io.adafruit.com";
 // Create an instance of the web server
 AsyncWebServer server(80);
 
-// Saving state
-String direction = "";  // Initialize Direction
-String lastDirection = "";
-int countRepeatedDirection = 0;
-
 // Setup MQTT
 WiFiClient espClient;
 PubSubClient client(espClient);
 
 
 // mqtt feed
-String n_traffic;
-String n_priority;
-String n_pedestrian;
-String n_timer;
-
-String w_traffic;
-String w_priority;
-String w_pedestrian;
-String w_timer;
+String aio_direction;
+String aio_directionTraffic;
+String aio_directionPriority;
+String aio_directionPedestrian;
+String aio_directionTimer;
 
 String feed1;
 String feed2;
 String feed3;
 String feed4;
-String feed5;
-String feed6;
-String feed7;
-String feed8;
+
+int vehicleCount = 7;
+int pedestrianCount = 0;
 
 void Wifi_Setup()
 {
@@ -177,11 +172,10 @@ void start_access_point()
   server.on("/save", HTTP_POST, []( AsyncWebServerRequest *request){
     Serial.println("Request received:");
 
-    if (request->hasParam("ssid", true) && request->hasParam("password", true) && request->hasParam("aio_username", true) && request->hasParam("aio_key", true)) {
+    if (request->hasParam("ssid", true) && request->hasParam("password", true) && request->hasParam("aio_direction", true) && request->hasParam("aio_username", true) && request->hasParam("aio_key", true)) {
       wifi_ssid = request->getParam("ssid", true)->value();
       wifi_password = request->getParam("password", true)->value();
-      aio_username = request->getParam("aio_username", true)->value();
-      aio_key = request->getParam("aio_key", true)->value();
+      aio_direction = request->getParam("aio_direction", true)->value();
 
       Serial.println("Saving credentials...");
       preferences.begin("wifiCreds", false);
@@ -189,6 +183,7 @@ void start_access_point()
       preferences.putString("wifi_password", wifi_password);
       preferences.putString("aio_username", aio_username);
       preferences.putString("aio_key", aio_key);
+      preferences.putString("aio_direction", aio_direction);
       preferences.end();
       Serial.println("Credentials saved successfully!");
       request->send(200, "text/plain", "Credentials saved successfully!");
@@ -208,6 +203,7 @@ bool credentialsExist() {
   const bool valid = preferences.getString("wifi_ssid", "") != "" &&
                preferences.getString("wifi_password", "") != "" &&
                preferences.getString("aio_username", "") != "" &&
+                 preferences.getString("aio_direction", "") != "" &&
                preferences.getString("aio_key", "") != "";
   preferences.end();
   return valid;
@@ -220,108 +216,47 @@ void callback(char* topic, const byte* payload, const unsigned int length) {
   Serial.println("Topic: " + incomingTopic);
   Serial.println("Value: " + value);
 
-  if (incomingTopic == aio_username + "/feeds/north.traffic")
+  if (incomingTopic == aio_username + "/feeds/" + aio_direction + ".timer")
   {
-    n_traffic = value;
+    Serial.println("Timer: " + value);
+    aio_directionTimer = value;
   }
-  if (incomingTopic == aio_username + "/feeds/west.traffic")
-  {
-    w_traffic = value;
+}
+
+void detectVehicle(bool isPriority = false) {
+  vehicleCount++;
+  aio_directionTraffic = String(vehicleCount);
+
+  if (isPriority) {
+    aio_directionPriority = "1";
+    post_Setup(feed2, "1");
+    Serial.println("Véhicule PRIORITAIRE détecté!");
   }
-  if (incomingTopic == aio_username + "/feeds/north.priority")
-  {
-    n_priority = value;
-  }
-  if (incomingTopic == aio_username + "/feeds/west.priority")
-  {
-    w_priority = value;
-  }
-  if (incomingTopic == aio_username + "/feeds/north.pedestrian")
-  {
-    n_pedestrian = value;
-  }
-  if (incomingTopic == aio_username + "/feeds/west.pedestrian")
-  {
-    w_pedestrian = value;
-  }
-  if (incomingTopic == aio_username + "/feeds/north.timer")
-  {
-    Serial.println("Timer North: " + value);
-    n_timer = value;
-  }
-  if (incomingTopic == aio_username + "/feeds/west.timer")
-  {
-    Serial.println("Timer West: " + value);
-    w_timer = value;
-  }
+
+  Serial.print("Véhicule détecté! Total: ");
+  Serial.println(vehicleCount);
+
+  post_Setup(feed1, aio_directionTraffic);
+}
+
+void detectPedestrian() {
+  aio_directionPedestrian = String(pedestrianCount);
+  Serial.println("Pedestrian detected!");
+  pedestrianCount++;
 }
 
 void controlTrafficLight() {
-  Serial.printf("Traffic North: %d\n", n_traffic.toInt());
-  Serial.printf("Traffic West: %d\n", w_traffic.toInt());
-  Serial.printf("Timer North: %d\n", n_timer.toInt());
-  Serial.printf("Timer West: %d\n", w_timer.toInt());
-  Serial.printf("Repeated Count: %d\n",countRepeatedDirection);
+  Serial.printf("Traffic : %d\n", aio_directionTraffic.toInt());
 
-  const int n_traffic_count = n_traffic.toInt();
-  const int w_traffic_count = w_traffic.toInt();
-  const int n_timer_count = n_timer.toInt();
-  const int w_timer_count = w_timer.toInt();
+  if (aio_directionPedestrian.toInt() == 1)
+    post_Setup(feed2, "1");
 
-  if (n_traffic_count == 0 && w_traffic_count == 0)
-  {
-    direction = "West";
-    post_Setup("west.timer", "0");
-    post_Setup("north.timer", "25");
-  }
+  if (aio_directionPriority.toInt() == 1)
+    post_Setup(feed3, "1");
 
-  if (lastDirection == "West" && w_timer_count == 5 && (n_traffic_count > w_traffic_count || countRepeatedDirection == 1)) {
-    Serial.println("West To North");
-    direction = "North";
-    post_Setup("west.timer", "0");
-    post_Setup("north.timer", "25");
-    countRepeatedDirection = 2;
-
-  } else if (lastDirection == "North" && n_timer_count == 5 && (w_traffic_count > n_traffic_count || countRepeatedDirection == 1))
-  {
-    Serial.println("North To West");
-    direction = "West";
-    post_Setup("north.timer", "0");
-    post_Setup("west.timer", "25");
-    countRepeatedDirection = 2;
-
-  } else if (lastDirection == "West" && w_timer_count == 5 && (n_traffic_count < w_traffic_count || countRepeatedDirection < 1)) {
-    Serial.println("West Repeat");
-    direction = "West";
-    post_Setup("north.timer", "0");
-    post_Setup("west.timer", "25");
-    countRepeatedDirection += 1;
-
-  } else if (lastDirection == "North" && n_timer_count == 5 && (w_traffic_count < n_traffic_count || countRepeatedDirection < 1)) {
-    Serial.println("North Repeat");
-    direction = "North";
-    post_Setup("west.timer", "0");
-    post_Setup("north.timer", "25");
-    countRepeatedDirection += 1;
-  } else
-  {
-    Serial.println("No change");
-    Serial.println("Last direction: " + lastDirection);
-    Serial.println("Current direction: " + direction);
-    Serial.println("Traffic North: " + n_traffic);
-    Serial.println("Traffic West: " + w_traffic);
-    Serial.println("Timer North: " + n_timer);
-    Serial.println("Timer West: " + w_timer);
-    Serial.println("CountRepeatedDirection: " + String(countRepeatedDirection));
-  }
-
-  lastDirection = direction; // Update last direction
-  if (countRepeatedDirection >= 2)
-  {
-    countRepeatedDirection = 0; // Reset count repeated direction
-  }
+  if (aio_directionTraffic.toInt() > 1)
+    post_Setup(feed1, String(vehicleCount));
 }
-
 
 void setup() {
   Serial.begin(115200);
@@ -333,35 +268,18 @@ void setup() {
     wifi_ssid = preferences.getString("wifi_ssid");
     wifi_password = preferences.getString("wifi_password");
     aio_username = preferences.getString("aio_username");
+    aio_direction = preferences.getString("aio_direction");
     aio_key = preferences.getString("aio_key");
     preferences.end();
 
     // Rebuild feeds with correct aio_username
-    feed1 = aio_username + "/feeds/north.traffic";
-    feed2 = aio_username + "/feeds/west.traffic";
-
-    feed3 = aio_username + "/feeds/north.priority";
-    feed4 = aio_username + "/feeds/west.priority";
-
-    feed5 = aio_username + "/feeds/north.pedestrian";
-    feed6 = aio_username + "/feeds/west.pedestrian";
-
-    feed7 = aio_username + "/feeds/north.timer";
-    feed8 = aio_username + "/feeds/west.timer";
+    feed1 = aio_username +  "/feeds/" + aio_direction + ".traffic";
+    feed2 = aio_username + "/feeds/" + aio_direction + ".priority";
+    feed3 = aio_username + "/feeds/" + aio_direction + ".pedestrian";
+    feed4 = aio_username + "/feeds/" + aio_direction + ".timer";
 
     Wifi_Setup();
     client.setServer(mqtt_server, 1883);
-    post_Setup("north.timer", "25");
-    post_Setup("west.timer", "0");
-    direction = "North";
-    n_traffic = get_Setup(feed1);
-    w_traffic = get_Setup(feed2);
-    n_priority = get_Setup(feed3);
-    w_priority = get_Setup(feed4);
-    n_pedestrian = get_Setup(feed5);
-    w_pedestrian = get_Setup(feed6);
-    n_timer = get_Setup(feed7);
-    w_timer = get_Setup(feed8);
     client.setCallback(callback);
     Serial.println("Connected to Adafruit");
     Serial.println("Waiting for API to clear up to not overflow free limit");
@@ -382,10 +300,6 @@ void setup() {
       client.subscribe(feed2.c_str());
       client.subscribe(feed3.c_str());
       client.subscribe(feed4.c_str());
-      client.subscribe(feed5.c_str());
-      client.subscribe(feed6.c_str());
-      client.subscribe(feed7.c_str());
-      client.subscribe(feed8.c_str());
     } else {
       Serial.print("Failed MQTT connection, rc=");
       Serial.print(client.state());
@@ -412,10 +326,6 @@ void loop() {
         client.subscribe(feed2.c_str());
         client.subscribe(feed3.c_str());
         client.subscribe(feed4.c_str());
-        client.subscribe(feed5.c_str());
-        client.subscribe(feed6.c_str());
-        client.subscribe(feed7.c_str());
-        client.subscribe(feed8.c_str());
       } else {
         Serial.print("Failed to reconnect, rc=");
         Serial.print(client.state());
@@ -424,7 +334,7 @@ void loop() {
     }
   }
 
-  if (n_timer == "5" || w_timer  == "5")
+  if (aio_directionTimer == "5")
   {
     Serial.println("Update Traffic Light");
     controlTrafficLight();
